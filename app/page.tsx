@@ -6,6 +6,7 @@ import Map from './components/Map';
 import {
   Coords,
   GeocodeResult,
+  WalkingRoute,
   formatClockTime,
   formatDuration,
   getCurrentPosition,
@@ -21,17 +22,62 @@ interface RouteResult {
   distanceMeters: number;
   durationSeconds: number;
   arrivalTime: Date;
+  reasoning: string | null;
+  alternativesCount: number;
+  chosenIndex: number;
+}
+
+async function pickRouteWithClaude(
+  preference: string,
+  routes: WalkingRoute[],
+): Promise<{ chosenIndex: number; reasoning: string }> {
+  const r = await fetch('/api/pick-route', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      preference,
+      alternatives: routes.map((rt) => ({
+        summary: rt.summary,
+        streetNames: rt.streetNames,
+        distanceMeters: rt.distanceMeters,
+      })),
+    }),
+  });
+  if (!r.ok) {
+    const data = (await r.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(data?.error ?? `Route picker failed (${r.status})`);
+  }
+  return r.json();
 }
 
 const CARD_SHADOW =
   'shadow-[0_4px_0_0_#3da95c33,0_8px_24px_-8px_rgba(61,169,92,0.15)]';
 
+const PREFERENCE_OPTIONS = [
+  { id: 'parks', label: 'Through parks', prompt: 'Run through parks and green space.' },
+  { id: 'riverside', label: 'Riverside', prompt: 'Stay close to the river or canal where possible.' },
+  { id: 'avoid-main-roads', label: 'Avoid main roads', prompt: 'Avoid busy main roads and high streets.' },
+  { id: 'quiet', label: 'Quiet streets', prompt: 'Prefer quiet residential streets over commercial ones.' },
+] as const;
+
+type PreferenceId = (typeof PREFERENCE_OPTIONS)[number]['id'];
+
 export default function Home() {
   const [destPlace, setDestPlace] = useState<GeocodeResult | null>(null);
   const [pace, setPace] = useState('5:30');
+  const [prefs, setPrefs] = useState<Set<PreferenceId>>(new Set());
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RouteResult | null>(null);
+
+  const togglePref = (id: PreferenceId) => {
+    setPrefs((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
 
   const onPlan = useCallback(async () => {
     setError(null);
@@ -47,19 +93,43 @@ export default function Home() {
     setBusy(true);
     try {
       const origin = await getCurrentPosition();
-      const { geometry, distanceMeters } = await getWalkingDirections(
-        origin,
-        destPlace.coords,
-      );
-      const durationSeconds = (distanceMeters / 1000) * paceSecs;
+      const selectedPrompts = PREFERENCE_OPTIONS
+        .filter((opt) => prefs.has(opt.id))
+        .map((opt) => opt.prompt);
+      const preferenceString = selectedPrompts.join(' ');
+      const routes = await getWalkingDirections(origin, destPlace.coords, {
+        generateVariants: preferenceString.length > 0,
+      });
+
+      let chosenIndex = 0;
+      let reasoning: string | null = null;
+      if (preferenceString) {
+        if (routes.length < 2) {
+          reasoning = `Only one walking route available — couldn't apply preferences.`;
+        } else {
+          try {
+            const pick = await pickRouteWithClaude(preferenceString, routes);
+            chosenIndex = pick.chosenIndex;
+            reasoning = pick.reasoning;
+          } catch (e) {
+            reasoning = `Couldn't apply preferences: ${e instanceof Error ? e.message : 'unknown error'}`;
+          }
+        }
+      }
+
+      const route = routes[chosenIndex];
+      const durationSeconds = (route.distanceMeters / 1000) * paceSecs;
       setResult({
         origin,
         destination: destPlace.coords,
         destinationLabel: destPlace.label,
-        geometry,
-        distanceMeters,
+        geometry: route.geometry,
+        distanceMeters: route.distanceMeters,
         durationSeconds,
         arrivalTime: new Date(Date.now() + durationSeconds * 1000),
+        reasoning,
+        alternativesCount: routes.length,
+        chosenIndex,
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Something went wrong');
@@ -67,7 +137,7 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
-  }, [destPlace, pace]);
+  }, [destPlace, pace, prefs]);
 
   return (
     <main className="min-h-screen bg-[#f5f1ea] text-[#1a1a1a] flex flex-col font-semibold">
@@ -103,6 +173,32 @@ export default function Home() {
           </div>
         </section>
 
+        <section className={`bg-white rounded-2xl p-5 ${CARD_SHADOW}`}>
+          <label className="block text-xs font-bold text-[#3da95c] uppercase tracking-widest mb-3">
+            Preferences <span className="opacity-50 normal-case font-normal">(optional)</span>
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {PREFERENCE_OPTIONS.map((opt) => {
+              const active = prefs.has(opt.id);
+              return (
+                <button
+                  key={opt.id}
+                  type="button"
+                  onClick={() => togglePref(opt.id)}
+                  className={
+                    active
+                      ? 'rounded-full px-4 py-2 text-xs uppercase tracking-widest font-bold bg-[#3da95c] text-white shadow-[0_2px_0_0_#2d8045]'
+                      : 'rounded-full px-4 py-2 text-xs uppercase tracking-widest font-bold bg-transparent text-[#1a1a1a]/70 border border-[#1a1a1a]/15 hover:bg-[#3da95c]/10 hover:border-[#3da95c]/40'
+                  }
+                  aria-pressed={active}
+                >
+                  {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </section>
+
         {result && (
           <section className="bg-[#3da95c] text-white rounded-2xl p-5 shadow-[0_4px_0_0_#2d8045,0_8px_24px_-8px_rgba(61,169,92,0.3)]">
             <p className="text-xs font-bold uppercase tracking-widest opacity-80">Arrive at</p>
@@ -115,6 +211,16 @@ export default function Home() {
             <p className="text-[10px] tracking-wide mt-3 opacity-70 normal-case font-normal">
               → {result.destinationLabel}
             </p>
+            {result.reasoning && (
+              <p className="text-xs leading-relaxed mt-3 opacity-90 normal-case font-normal italic">
+                {result.reasoning}
+              </p>
+            )}
+            {result.alternativesCount > 1 && (
+              <p className="text-[10px] uppercase tracking-widest mt-2 opacity-60 font-normal">
+                Picked {result.chosenIndex + 1} of {result.alternativesCount} routes
+              </p>
+            )}
           </section>
         )}
 

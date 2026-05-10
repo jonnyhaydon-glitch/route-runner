@@ -130,21 +130,53 @@ export async function geocodeDestination(
   return { coords: f.geometry.coordinates as Coords, label };
 }
 
-export interface DirectionsResult {
+export interface WalkingRoute {
   geometry: GeoJSON.LineString;
   distanceMeters: number;
+  summary: string;
+  streetNames: string[];
 }
 
-export async function getWalkingDirections(
+interface MapboxStep {
+  name?: string;
+}
+
+interface MapboxLeg {
+  summary?: string;
+  steps?: MapboxStep[];
+}
+
+interface MapboxRoute {
+  geometry: GeoJSON.LineString;
+  distance: number;
+  legs?: MapboxLeg[];
+}
+
+interface BiasParams {
+  walkway_bias?: number;
+  alley_bias?: number;
+}
+
+async function fetchWalkingRoutes(
   origin: Coords,
   destination: Coords,
-): Promise<DirectionsResult> {
+  opts: { alternatives?: boolean } & BiasParams,
+): Promise<WalkingRoute[]> {
   if (!TOKEN) throw new Error('Mapbox token missing');
   const coords = `${origin[0]},${origin[1]};${destination[0]},${destination[1]}`;
   const url = new URL(`https://api.mapbox.com/directions/v5/mapbox/walking/${coords}`);
   url.searchParams.set('access_token', TOKEN);
   url.searchParams.set('geometries', 'geojson');
   url.searchParams.set('overview', 'full');
+  url.searchParams.set('steps', 'true');
+  url.searchParams.set('exclude', 'ferry');
+  if (opts.alternatives) url.searchParams.set('alternatives', 'true');
+  if (opts.walkway_bias !== undefined) {
+    url.searchParams.set('walkway_bias', String(opts.walkway_bias));
+  }
+  if (opts.alley_bias !== undefined) {
+    url.searchParams.set('alley_bias', String(opts.alley_bias));
+  }
   const r = await fetch(url);
   const data = await r.json().catch(() => null);
   if (!r.ok || (data && data.code && data.code !== 'Ok')) {
@@ -156,9 +188,64 @@ export async function getWalkingDirections(
     if (code === 'InvalidInput') throw new Error(`Mapbox rejected the request: ${message}`);
     throw new Error(`Directions failed: ${message} (${code})`);
   }
-  if (!data?.routes?.[0]) throw new Error('No walkable route found');
-  return {
-    geometry: data.routes[0].geometry as GeoJSON.LineString,
-    distanceMeters: data.routes[0].distance as number,
-  };
+  const routes = (data?.routes ?? []) as MapboxRoute[];
+  return routes.map((route) => {
+    const legs = route.legs ?? [];
+    const stepNames: string[] = [];
+    const seen = new Set<string>();
+    for (const leg of legs) {
+      for (const step of leg.steps ?? []) {
+        const n = step.name?.trim();
+        if (n && !seen.has(n)) {
+          seen.add(n);
+          stepNames.push(n);
+        }
+      }
+    }
+    const summaries = legs.map((l) => l.summary?.trim()).filter(Boolean) as string[];
+    const summary = summaries.length > 0 ? summaries.join(' / ') : stepNames.slice(0, 4).join(', ');
+    return {
+      geometry: route.geometry,
+      distanceMeters: route.distance,
+      summary,
+      streetNames: stepNames,
+    };
+  });
+}
+
+function dedupeRoutes(routes: WalkingRoute[]): WalkingRoute[] {
+  const out: WalkingRoute[] = [];
+  for (const r of routes) {
+    const isDuplicate = out.some(
+      (existing) =>
+        Math.abs(existing.distanceMeters - r.distanceMeters) < 50 &&
+        existing.streetNames.slice(0, 5).join('|') === r.streetNames.slice(0, 5).join('|'),
+    );
+    if (!isDuplicate) out.push(r);
+  }
+  return out;
+}
+
+export async function getWalkingDirections(
+  origin: Coords,
+  destination: Coords,
+  options: { generateVariants?: boolean } = {},
+): Promise<WalkingRoute[]> {
+  if (!options.generateVariants) {
+    const routes = await fetchWalkingRoutes(origin, destination, { alternatives: true });
+    if (routes.length === 0) throw new Error('No walkable route found');
+    return routes;
+  }
+
+  const calls = await Promise.all([
+    fetchWalkingRoutes(origin, destination, { alternatives: true }),
+    fetchWalkingRoutes(origin, destination, { walkway_bias: 1 }).catch(() => []),
+    fetchWalkingRoutes(origin, destination, { walkway_bias: 0.5, alley_bias: 0.5 }).catch(
+      () => [],
+    ),
+  ]);
+
+  const all = dedupeRoutes(calls.flat());
+  if (all.length === 0) throw new Error('No walkable route found');
+  return all.slice(0, 3);
 }
