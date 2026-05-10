@@ -49,6 +49,64 @@ export interface GeocodeResult {
   label: string;
 }
 
+export interface PlaceSuggestion {
+  mapboxId: string;
+  name: string;
+  description: string;
+}
+
+export async function suggestPlaces(
+  query: string,
+  sessionToken: string,
+  signal?: AbortSignal,
+): Promise<PlaceSuggestion[]> {
+  if (!TOKEN) throw new Error('Mapbox token missing');
+  const url = new URL('https://api.mapbox.com/search/searchbox/v1/suggest');
+  url.searchParams.set('q', query);
+  url.searchParams.set('access_token', TOKEN);
+  url.searchParams.set('session_token', sessionToken);
+  url.searchParams.set('language', 'en');
+  url.searchParams.set('limit', '6');
+  url.searchParams.set('proximity', 'ip');
+  const r = await fetch(url, { signal });
+  if (!r.ok) throw new Error(`Suggest failed (${r.status})`);
+  const data = await r.json();
+  const items = (data.suggestions ?? []) as Array<{
+    mapbox_id: string;
+    name?: string;
+    name_preferred?: string;
+    place_formatted?: string;
+    full_address?: string;
+  }>;
+  return items.map((i) => ({
+    mapboxId: i.mapbox_id,
+    name: i.name_preferred ?? i.name ?? '',
+    description: i.full_address ?? i.place_formatted ?? '',
+  }));
+}
+
+export async function retrievePlace(
+  mapboxId: string,
+  sessionToken: string,
+): Promise<GeocodeResult> {
+  if (!TOKEN) throw new Error('Mapbox token missing');
+  const url = new URL(
+    `https://api.mapbox.com/search/searchbox/v1/retrieve/${encodeURIComponent(mapboxId)}`,
+  );
+  url.searchParams.set('access_token', TOKEN);
+  url.searchParams.set('session_token', sessionToken);
+  const r = await fetch(url);
+  if (!r.ok) throw new Error(`Retrieve failed (${r.status})`);
+  const data = await r.json();
+  const f = data.features?.[0];
+  if (!f?.geometry?.coordinates) throw new Error('Place not found');
+  const props = f.properties ?? {};
+  const name = props.name_preferred ?? props.name;
+  const address = props.full_address ?? props.place_formatted;
+  const label = name && address ? `${name} — ${address}` : (name ?? address ?? '');
+  return { coords: f.geometry.coordinates as Coords, label };
+}
+
 export async function geocodeDestination(
   query: string,
   proximity: Coords,

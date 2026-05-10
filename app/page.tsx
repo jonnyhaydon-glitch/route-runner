@@ -1,12 +1,13 @@
 'use client';
 
 import { useCallback, useState } from 'react';
+import DestinationSearch from './components/DestinationSearch';
 import Map from './components/Map';
 import {
   Coords,
+  GeocodeResult,
   formatClockTime,
   formatDuration,
-  geocodeDestination,
   getCurrentPosition,
   getWalkingDirections,
   parsePaceToSecondsPerKm,
@@ -26,7 +27,7 @@ const CARD_SHADOW =
   'shadow-[0_4px_0_0_#3da95c33,0_8px_24px_-8px_rgba(61,169,92,0.15)]';
 
 export default function Home() {
-  const [destination, setDestination] = useState('');
+  const [destPlace, setDestPlace] = useState<GeocodeResult | null>(null);
   const [pace, setPace] = useState('5:30');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +35,8 @@ export default function Home() {
 
   const onPlan = useCallback(async () => {
     setError(null);
-    if (!destination.trim()) {
-      setError('Enter a destination');
+    if (!destPlace) {
+      setError('Pick a destination from the suggestions');
       return;
     }
     const paceSecs = parsePaceToSecondsPerKm(pace);
@@ -46,13 +47,15 @@ export default function Home() {
     setBusy(true);
     try {
       const origin = await getCurrentPosition();
-      const { coords: dest, label } = await geocodeDestination(destination.trim(), origin);
-      const { geometry, distanceMeters } = await getWalkingDirections(origin, dest);
+      const { geometry, distanceMeters } = await getWalkingDirections(
+        origin,
+        destPlace.coords,
+      );
       const durationSeconds = (distanceMeters / 1000) * paceSecs;
       setResult({
         origin,
-        destination: dest,
-        destinationLabel: label,
+        destination: destPlace.coords,
+        destinationLabel: destPlace.label,
         geometry,
         distanceMeters,
         durationSeconds,
@@ -64,7 +67,7 @@ export default function Home() {
     } finally {
       setBusy(false);
     }
-  }, [destination, pace]);
+  }, [destPlace, pace]);
 
   return (
     <main className="min-h-screen bg-[#f5f1ea] text-[#1a1a1a] flex flex-col font-semibold">
@@ -78,17 +81,11 @@ export default function Home() {
       </header>
 
       <div className="flex-1 px-6 pb-6 flex flex-col gap-5">
-        <section className={`bg-white rounded-2xl p-5 ${CARD_SHADOW}`}>
+        <section className={`relative bg-white rounded-2xl p-5 z-20 ${CARD_SHADOW}`}>
           <label className="block text-xs font-bold text-[#3da95c] uppercase tracking-widest mb-2">
             Destination
           </label>
-          <input
-            type="text"
-            value={destination}
-            onChange={(e) => setDestination(e.target.value)}
-            placeholder="THE CROWN, BATTERSEA"
-            className="w-full text-lg uppercase tracking-wide bg-transparent outline-none placeholder:text-[#1a1a1a]/30"
-          />
+          <DestinationSearch onSelect={setDestPlace} />
         </section>
 
         <section className={`bg-white rounded-2xl p-5 ${CARD_SHADOW}`}>
