@@ -15,12 +15,15 @@ export default function Map() {
     if (!TOKEN || TOKEN.startsWith('pk.PASTE')) return;
 
     mapboxgl.accessToken = TOKEN;
-    mapRef.current = new mapboxgl.Map({
+    const map = new mapboxgl.Map({
       container: containerRef.current,
       style: 'mapbox://styles/mapbox/streets-v12',
       center: [-0.1556, 51.4795],
       zoom: 13,
     });
+    map.on('error', (e) => console.error('[mapbox]', e?.error ?? e));
+    map.on('load', () => map.resize());
+    mapRef.current = map;
 
     return () => {
       mapRef.current?.remove();
@@ -30,7 +33,10 @@ export default function Map() {
 
   if (!TOKEN || TOKEN.startsWith('pk.PASTE')) {
     return (
-      <div className="absolute inset-0 flex items-center justify-center p-5">
+      <div
+        style={{ position: 'absolute', inset: 0 }}
+        className="flex items-center justify-center p-5"
+      >
         <p className="text-xs uppercase tracking-widest text-[#1a1a1a]/40 text-center leading-relaxed">
           Mapbox token<br />not configured
         </p>
@@ -38,5 +44,5 @@ export default function Map() {
     );
   }
 
-  return <div ref={containerRef} className="absolute inset-0" />;
+  return <div ref={containerRef} style={{ position: 'absolute', inset: 0 }} />;
 }
