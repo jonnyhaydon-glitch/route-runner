@@ -1,3 +1,5 @@
+import Map from './components/Map';
+
 export default function Home() {
   return (
     <main className="min-h-screen bg-[#f5f1ea] text-[#1a1a1a] flex flex-col font-semibold">
@@ -40,11 +42,9 @@ export default function Home() {
           </div>
         </section>
 
-        {/* Placeholder for route results */}
-        <section className="flex-1 bg-white rounded-2xl p-5 shadow-[0_4px_0_0_#3da95c33,0_8px_24px_-8px_rgba(61,169,92,0.15)] flex items-center justify-center min-h-[200px]">
-          <p className="text-xs uppercase tracking-widest text-[#1a1a1a]/40 text-center leading-relaxed">
-            Your route<br />will appear here
-          </p>
+        {/* Map / route results */}
+        <section className="relative flex-1 bg-white rounded-2xl shadow-[0_4px_0_0_#3da95c33,0_8px_24px_-8px_rgba(61,169,92,0.15)] min-h-[300px] overflow-hidden">
+          <Map />
         </section>
 
         {/* Plan button */}
