@@ -1,5 +1,8 @@
-// Next.js 16 renamed `middleware.ts` to `proxy.ts` — same hook, runs before each request.
-// Used here as a soft access gate while the testing deploy is live.
+// Soft access gate while the testing deploy is live.
+//
+// Note on naming: Next.js 16 renamed `middleware.ts` to `proxy.ts`. Both still work as of
+// 16.2 (the runtime accepts either filename), but Netlify's Next.js adapter only picks up
+// `middleware.ts` currently — so we keep that name until the adapter ships proxy.ts support.
 //
 // When SITE_PASSWORD is set, every request must include HTTP Basic credentials whose
 // password matches. The browser will surface a native login dialog and remember the
@@ -17,7 +20,7 @@ function challenge() {
   });
 }
 
-export function proxy(request: NextRequest) {
+export function middleware(request: NextRequest) {
   const expected = process.env.SITE_PASSWORD;
   if (!expected) return NextResponse.next();
 
