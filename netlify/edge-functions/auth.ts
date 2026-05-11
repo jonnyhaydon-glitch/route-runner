@@ -1,14 +1,15 @@
 // Netlify Edge Function — HTTP Basic Auth gate for the testing deploy.
 //
-// Runs before the Next.js handler/static cache, so it gates every request
-// (including cached pages, which is the gap that the Next.js middleware can't cover
-// on Netlify). When SITE_PASSWORD is unset, this function is a no-op.
+// Routing is declared in netlify.toml (which takes precedence over inline `config`
+// per the Netlify docs and runs even on prerendered static routes that the Next.js
+// adapter would otherwise serve via internal rewrite). When SITE_PASSWORD is unset
+// (local dev, etc.) this function is a no-op.
 
-import type { Config, Context } from '@netlify/edge-functions';
+import type { Context } from '@netlify/edge-functions';
 
 const REALM = 'Route Runner — testing access';
 
-export default async (request: Request, context: Context) => {
+export default async (request: Request, _context: Context) => {
   const expected = Netlify.env.get('SITE_PASSWORD');
   if (!expected) return; // gate disabled
 
@@ -29,8 +30,4 @@ export default async (request: Request, context: Context) => {
     status: 401,
     headers: { 'WWW-Authenticate': `Basic realm="${REALM}"` },
   });
-};
-
-export const config: Config = {
-  path: '/*',
 };

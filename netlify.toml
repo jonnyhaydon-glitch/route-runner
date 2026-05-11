@@ -1,0 +1,8 @@
+# Netlify config. The Next.js adapter handles build settings automatically;
+# this file only declares the basic-auth edge function so it runs ahead of
+# Next.js static rewrites (which would otherwise bypass an inline-configured
+# edge function).
+
+[[edge_functions]]
+  path = "/*"
+  function = "auth"
