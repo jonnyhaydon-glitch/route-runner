@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { isOriginAllowed, sanitizeUserText } from '../../lib/api-guard';
 
 interface AlternativeIn {
   summary: string;
@@ -47,6 +48,9 @@ function formatRoutes(alts: AlternativeIn[]): string {
 }
 
 export async function POST(request: Request) {
+  if (!isOriginAllowed(request)) {
+    return Response.json({ error: 'Forbidden' }, { status: 403 });
+  }
   if (!process.env.ANTHROPIC_API_KEY) {
     return Response.json({ error: 'Server is missing ANTHROPIC_API_KEY' }, { status: 500 });
   }
@@ -58,9 +62,9 @@ export async function POST(request: Request) {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const preference = body.preference?.trim() ?? '';
+  const preference = sanitizeUserText(body.preference, 300);
   const alternatives = body.alternatives ?? [];
-  if (preference.length === 0 || preference.length > 300) {
+  if (preference.length === 0) {
     return Response.json({ error: 'preference must be 1-300 chars' }, { status: 400 });
   }
   if (!Array.isArray(alternatives) || alternatives.length < 2 || alternatives.length > 3) {

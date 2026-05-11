@@ -1,26 +1,63 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --color-forest: #1F3A2E;
+  --color-forest-deep: #162820;
+  --color-coral: #FF6B47;
+  --color-coral-deep: #E85530;
+  --color-bg: #FAF7F2;
+  --color-sage: #E8EDE5;
+  --color-sage-deep: #D5DDD0;
+  --color-ink: #1A1A1A;
+  --color-tracker: #FC5200;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+html, body {
+  margin: 0;
+  padding: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  overscroll-behavior: none;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  font-family: var(--font-inter), -apple-system, system-ui, sans-serif;
 }
+
+/* Hide scrollbars on screens that scroll internally */
+.scroll-hidden::-webkit-scrollbar { display: none; }
+.scroll-hidden { scrollbar-width: none; }
+
+@keyframes thinkPulse {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.5; }
+  40% { transform: scale(1); opacity: 1; }
+}
+@keyframes confettiFall {
+  0% { transform: translateY(0) rotate(0); opacity: 1; }
+  100% { transform: translateY(820px) rotate(720deg); opacity: 0; }
+}
+@keyframes slideInRight {
+  from { transform: translateX(40px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideInLeft {
+  from { transform: translateX(-40px); opacity: 0; }
+  to { transform: translateX(0); opacity: 1; }
+}
+@keyframes slideUp {
+  from { transform: translateY(60px); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+.anim-fadeIn { animation: fadeIn 0.32s cubic-bezier(0.32, 0.72, 0, 1); }
+.anim-slideInRight { animation: slideInRight 0.32s cubic-bezier(0.32, 0.72, 0, 1); }
+.anim-slideInLeft { animation: slideInLeft 0.32s cubic-bezier(0.32, 0.72, 0, 1); }
+.anim-slideUp { animation: slideUp 0.4s cubic-bezier(0.32, 0.72, 0, 1); }

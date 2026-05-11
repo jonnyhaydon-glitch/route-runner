@@ -226,6 +226,139 @@ function dedupeRoutes(routes: WalkingRoute[]): WalkingRoute[] {
   return out;
 }
 
+export interface POI {
+  id: string;
+  name: string;
+  category: string;
+  coords: Coords;
+  distanceKm: number;
+  bearingDeg: number;
+}
+
+interface MapboxCategoryFeature {
+  geometry: { coordinates: [number, number] };
+  properties: { mapbox_id: string; name?: string; name_preferred?: string };
+}
+
+function haversineKm(a: Coords, b: Coords): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const R = 6371;
+  const dLat = toRad(b[1] - a[1]);
+  const dLng = toRad(b[0] - a[0]);
+  const lat1 = toRad(a[1]);
+  const lat2 = toRad(b[1]);
+  const x = Math.sin(dLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(x));
+}
+
+function bearingDeg(from: Coords, to: Coords): number {
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const toDeg = (r: number) => (r * 180) / Math.PI;
+  const lat1 = toRad(from[1]);
+  const lat2 = toRad(to[1]);
+  const dLng = toRad(to[0] - from[0]);
+  const y = Math.sin(dLng) * Math.cos(lat2);
+  const x = Math.cos(lat1) * Math.sin(lat2) - Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLng);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+function bboxAround(center: Coords, radiusKm: number): [number, number, number, number] {
+  const dLat = radiusKm / 111;
+  const dLng = radiusKm / (111 * Math.cos((center[1] * Math.PI) / 180));
+  return [center[0] - dLng, center[1] - dLat, center[0] + dLng, center[1] + dLat];
+}
+
+async function fetchCategory(category: string, center: Coords, radiusKm: number, limit: number): Promise<POI[]> {
+  if (!TOKEN) throw new Error('Mapbox token missing');
+  const url = new URL(`https://api.mapbox.com/search/searchbox/v1/category/${encodeURIComponent(category)}`);
+  url.searchParams.set('access_token', TOKEN);
+  url.searchParams.set('proximity', `${center[0]},${center[1]}`);
+  url.searchParams.set('bbox', bboxAround(center, radiusKm).join(','));
+  url.searchParams.set('limit', String(limit));
+  url.searchParams.set('language', 'en');
+  const r = await fetch(url);
+  if (!r.ok) return [];
+  const data = await r.json();
+  const features = (data.features ?? []) as MapboxCategoryFeature[];
+  return features
+    .filter((f) => f.geometry?.coordinates && f.properties?.mapbox_id)
+    .map((f) => {
+      const coords = f.geometry.coordinates as Coords;
+      return {
+        id: f.properties.mapbox_id,
+        name: f.properties.name_preferred ?? f.properties.name ?? category,
+        category,
+        coords,
+        distanceKm: haversineKm(center, coords),
+        bearingDeg: bearingDeg(center, coords),
+      };
+    });
+}
+
+export async function searchPOIs(
+  center: Coords,
+  categories: string[],
+  radiusKm: number,
+  perCategory = 12,
+): Promise<POI[]> {
+  const results = await Promise.all(
+    categories.map((c) => fetchCategory(c, center, radiusKm, perCategory).catch(() => [] as POI[])),
+  );
+  const seen = new Set<string>();
+  const out: POI[] = [];
+  for (const list of results) {
+    for (const p of list) {
+      if (seen.has(p.id)) continue;
+      seen.add(p.id);
+      out.push(p);
+    }
+  }
+  return out;
+}
+
+export async function routeWaypoints(origin: Coords, waypoints: Coords[]): Promise<WalkingRoute> {
+  if (!TOKEN) throw new Error('Mapbox token missing');
+  const stops = [origin, ...waypoints, origin];
+  const coords = stops.map((c) => `${c[0]},${c[1]}`).join(';');
+  const url = new URL(`https://api.mapbox.com/directions/v5/mapbox/walking/${coords}`);
+  url.searchParams.set('access_token', TOKEN);
+  url.searchParams.set('geometries', 'geojson');
+  url.searchParams.set('overview', 'full');
+  url.searchParams.set('steps', 'true');
+  url.searchParams.set('exclude', 'ferry');
+  const r = await fetch(url);
+  const data = await r.json().catch(() => null);
+  if (!r.ok || (data && data.code && data.code !== 'Ok')) {
+    const code = data?.code ?? r.status;
+    const message = data?.message ?? 'unknown error';
+    if (code === 'NoRoute') throw new Error('No walking route through those waypoints');
+    if (code === 'NoSegment') throw new Error("Couldn't snap to a road near one of the waypoints");
+    throw new Error(`Directions failed: ${message} (${code})`);
+  }
+  const route = (data?.routes ?? [])[0] as MapboxRoute | undefined;
+  if (!route) throw new Error('No route returned');
+  const legs = route.legs ?? [];
+  const stepNames: string[] = [];
+  const seen = new Set<string>();
+  for (const leg of legs) {
+    for (const step of leg.steps ?? []) {
+      const n = step.name?.trim();
+      if (n && !seen.has(n)) {
+        seen.add(n);
+        stepNames.push(n);
+      }
+    }
+  }
+  const summaries = legs.map((l) => l.summary?.trim()).filter(Boolean) as string[];
+  const summary = summaries.length > 0 ? summaries.join(' / ') : stepNames.slice(0, 4).join(', ');
+  return {
+    geometry: route.geometry,
+    distanceMeters: route.distance,
+    summary,
+    streetNames: stepNames,
+  };
+}
+
 export async function getWalkingDirections(
   origin: Coords,
   destination: Coords,

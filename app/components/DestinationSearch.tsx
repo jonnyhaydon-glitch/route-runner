@@ -8,12 +8,14 @@ import {
   retrievePlace,
   suggestPlaces,
 } from '../lib/mapbox';
+import { C } from '../lib/tokens';
 
 interface Props {
   onSelect: (place: GeocodeResult | null) => void;
+  placeholder?: string;
 }
 
-export default function DestinationSearch({ onSelect }: Props) {
+export default function DestinationSearch({ onSelect, placeholder = 'Search destination' }: Props) {
   const [text, setText] = useState('');
   const [suggestions, setSuggestions] = useState<PlaceSuggestion[]>([]);
   const [open, setOpen] = useState(false);
@@ -84,35 +86,67 @@ export default function DestinationSearch({ onSelect }: Props) {
   }
 
   return (
-    <div ref={wrapperRef} className="relative">
+    <div ref={wrapperRef} style={{ position: 'relative' }}>
       <input
         type="text"
         value={text}
         onChange={onChange}
         onFocus={() => suggestions.length > 0 && setOpen(true)}
-        placeholder="THE CROWN, BATTERSEA"
-        className="w-full text-lg uppercase tracking-wide bg-transparent outline-none placeholder:text-[#1a1a1a]/30"
+        placeholder={placeholder}
+        style={{
+          width: '100%',
+          fontSize: 15,
+          fontWeight: 500,
+          color: text ? C.ink : C.ink40,
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          padding: 0,
+        }}
         autoComplete="off"
         autoCorrect="off"
         autoCapitalize="off"
         spellCheck={false}
       />
       {open && suggestions.length > 0 && (
-        <ul className="absolute left-0 right-0 top-full mt-3 bg-white rounded-2xl shadow-[0_4px_0_0_#3da95c33,0_8px_24px_-8px_rgba(61,169,92,0.25)] overflow-hidden z-50">
+        <ul
+          style={{
+            position: 'absolute',
+            left: -12,
+            right: -12,
+            top: 'calc(100% + 12px)',
+            background: '#fff',
+            borderRadius: 18,
+            boxShadow: '0 12px 32px rgba(31,58,46,0.18), 0 0 0 1px rgba(26,26,26,0.06)',
+            overflow: 'hidden',
+            zIndex: 50,
+            listStyle: 'none',
+            padding: 0,
+            margin: 0,
+          }}
+        >
           {suggestions.map((s, i) => (
             <li key={s.mapboxId}>
               <button
                 type="button"
                 onClick={() => pick(s)}
-                className={`w-full text-left px-5 py-3 hover:bg-[#3da95c]/10 active:bg-[#3da95c]/20 transition-colors ${
-                  i > 0 ? 'border-t border-[#1a1a1a]/10' : ''
-                }`}
+                style={{
+                  all: 'unset',
+                  cursor: 'pointer',
+                  width: '100%',
+                  boxSizing: 'border-box',
+                  padding: '12px 16px',
+                  borderTop: i > 0 ? `1px solid ${C.ink08}` : 'none',
+                  display: 'block',
+                }}
               >
-                <p className="text-sm font-bold text-[#1a1a1a] truncate">{s.name}</p>
+                <div style={{ fontSize: 14, fontWeight: 600, color: C.ink, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {s.name}
+                </div>
                 {s.description && (
-                  <p className="text-xs text-[#1a1a1a]/60 mt-0.5 truncate font-normal normal-case">
+                  <div style={{ fontSize: 12, color: C.ink60, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {s.description}
-                  </p>
+                  </div>
                 )}
               </button>
             </li>

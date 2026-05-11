@@ -1,30 +1,40 @@
 'use client';
 
-import { useCallback, useState } from 'react';
-import DestinationSearch from './components/DestinationSearch';
-import Map from './components/Map';
+import { useRef, useState } from 'react';
+import BottomNav from './components/BottomNav';
+import DiscoverScreen from './components/screens/DiscoverScreen';
+import DesignScreen from './components/screens/DesignScreen';
+import RoutesScreen from './components/screens/RoutesScreen';
+import LiveRunScreen from './components/screens/LiveRunScreen';
+import SummaryScreen from './components/screens/SummaryScreen';
+import SavedScreen from './components/screens/SavedScreen';
+import ProfileScreen from './components/screens/ProfileScreen';
+import {
+  DesignParams,
+  GeneratedRoute,
+  MOOD_OPTIONS,
+  Mode,
+  Tab,
+  defaultDesignParams,
+  paceSecondsPerKm,
+  prefsToPromptString,
+} from './lib/screen-state';
 import {
   Coords,
-  GeocodeResult,
+  POI,
   WalkingRoute,
-  formatClockTime,
-  formatDuration,
   getCurrentPosition,
   getWalkingDirections,
-  parsePaceToSecondsPerKm,
+  routeWaypoints,
+  searchPOIs,
 } from './lib/mapbox';
 
-interface RouteResult {
-  origin: Coords;
-  destination: Coords;
-  destinationLabel: string;
-  geometry: GeoJSON.LineString;
-  distanceMeters: number;
-  durationSeconds: number;
-  arrivalTime: Date;
-  reasoning: string | null;
-  alternativesCount: number;
-  chosenIndex: number;
+const ROUTE_NAMES = ['The Canal Loop', 'Park Hopper', 'Hill Reward'];
+const ROUTE_SEEDS = [33, 64, 12];
+
+interface FinishStats {
+  elapsedSeconds: number;
+  distanceKm: number;
 }
 
 async function pickRouteWithClaude(
@@ -50,216 +60,330 @@ async function pickRouteWithClaude(
   return r.json();
 }
 
-const CARD_SHADOW =
-  'shadow-[0_4px_0_0_#3da95c33,0_8px_24px_-8px_rgba(61,169,92,0.15)]';
+function buildMockRoutes(params: DesignParams): GeneratedRoute[] {
+  const baseKm = params.distance;
+  const paceSec = paceSecondsPerKm(params.pace);
+  const offsets = [0, 0.6, -0.4];
+  const elevations = [18, 24, 86];
+  const offroads = [72, 58, 30];
+  const rationales = [
+    'Hugs the canal towpath for 80% of the run, finishes near a coffee stop.',
+    'Chains three local parks with quiet residential connectors between them.',
+    'Two punchy climbs through the back streets, then a downhill cooldown to finish.',
+  ];
+  return ROUTE_NAMES.map((name, i) => {
+    const km = Math.max(1, baseKm + offsets[i]);
+    return {
+      id: `mock-${i}`,
+      name,
+      seed: ROUTE_SEEDS[i],
+      distanceMeters: km * 1000,
+      durationSeconds: km * paceSec,
+      rationale: rationales[i],
+      geometry: null,
+      origin: null,
+      destination: null,
+      destinationLabel: '',
+      elevationMeters: elevations[i],
+      offroadPct: offroads[i],
+      source: null,
+      isRecommended: i === 0,
+    };
+  });
+}
 
-const PREFERENCE_OPTIONS = [
-  { id: 'parks', label: 'Through parks', prompt: 'Run through parks and green space.' },
-  { id: 'riverside', label: 'Riverside', prompt: 'Stay close to the river or canal where possible.' },
-  { id: 'avoid-main-roads', label: 'Avoid main roads', prompt: 'Avoid busy main roads and high streets.' },
-  { id: 'quiet', label: 'Quiet streets', prompt: 'Prefer quiet residential streets over commercial ones.' },
-] as const;
+interface PlannedLoop {
+  name: string;
+  rationale: string;
+  waypointIds: string[];
+}
 
-type PreferenceId = (typeof PREFERENCE_OPTIONS)[number]['id'];
+async function planLoopsWithClaude(args: {
+  prefs: string;
+  mood: string | null;
+  targetKm: number;
+  pois: POI[];
+}): Promise<PlannedLoop[]> {
+  const r = await fetch('/api/plan-loops', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(args),
+  });
+  if (!r.ok) {
+    const data = (await r.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(data?.error ?? `Loop planner failed (${r.status})`);
+  }
+  const data = (await r.json()) as { loops: PlannedLoop[] };
+  return data.loops;
+}
+
+async function buildLoopRoutes(params: DesignParams): Promise<GeneratedRoute[]> {
+  const origin = await getCurrentPosition();
+  const targetKm = params.distance;
+  const radiusKm = Math.max(0.5, targetKm * 0.45);
+
+  const pois = await searchPOIs(origin, ['park', 'coffee'], radiusKm);
+  if (pois.length < 3) {
+    throw new Error('Not enough places nearby to design a loop — try a smaller distance or set a destination');
+  }
+
+  const moodLabel = params.mood ? MOOD_OPTIONS.find((m) => m.id === params.mood)?.label ?? null : null;
+  const loops = await planLoopsWithClaude({
+    prefs: prefsToPromptString(params.prefs),
+    mood: moodLabel,
+    targetKm,
+    pois,
+  });
+
+  const paceSec = paceSecondsPerKm(params.pace);
+  const fallbackSeeds = [33, 64, 12];
+  const fallbackElevation = [18, 24, 86];
+  const fallbackOffroad = [72, 58, 30];
+
+  const settled = await Promise.allSettled(
+    loops.map(async (loop) => {
+      const waypoints = loop.waypointIds
+        .map((id) => pois.find((p) => p.id === id)?.coords)
+        .filter((c): c is Coords => Array.isArray(c));
+      if (waypoints.length === 0) throw new Error('No valid waypoints');
+      const rt = await routeWaypoints(origin, waypoints);
+      return { loop, rt };
+    }),
+  );
+
+  const candidates = settled
+    .map((s, i) => (s.status === 'fulfilled' ? { ...s.value, index: i } : null))
+    .filter((c): c is { loop: PlannedLoop; rt: WalkingRoute; index: number } => c !== null);
+
+  if (candidates.length === 0) {
+    throw new Error('Could not route any of the planned loops');
+  }
+
+  // Drop loops that are wildly off-target (>50% off), then sort by closeness.
+  const filtered = candidates.filter(
+    ({ rt }) => Math.abs(rt.distanceMeters / 1000 - targetKm) / targetKm <= 0.5,
+  );
+  const pick = (filtered.length > 0 ? filtered : candidates).sort(
+    (a, b) =>
+      Math.abs(a.rt.distanceMeters / 1000 - targetKm) - Math.abs(b.rt.distanceMeters / 1000 - targetKm),
+  );
+
+  return pick.map((c, i) => {
+    const km = c.rt.distanceMeters / 1000;
+    return {
+      id: `loop-${c.index}`,
+      name: c.loop.name,
+      seed: fallbackSeeds[i] ?? 33,
+      distanceMeters: c.rt.distanceMeters,
+      durationSeconds: km * paceSec,
+      rationale: c.loop.rationale,
+      geometry: c.rt.geometry,
+      origin,
+      destination: origin,
+      destinationLabel: 'back at your start',
+      elevationMeters: fallbackElevation[i] ?? 30,
+      offroadPct: fallbackOffroad[i] ?? 50,
+      source: c.rt,
+      isRecommended: i === 0,
+    };
+  });
+}
+
+async function buildRealRoutes(params: DesignParams): Promise<GeneratedRoute[]> {
+  if (!params.destination) throw new Error('NO_DEST');
+  const origin = await getCurrentPosition();
+  const dest = params.destination.coords;
+  const preferenceString = prefsToPromptString(params.prefs);
+  const routes = await getWalkingDirections(origin, dest, {
+    generateVariants: preferenceString.length > 0,
+  });
+  if (routes.length === 0) throw new Error('No walking route found between you and that place');
+
+  let chosenIndex = 0;
+  let recommendedReasoning: string | null = null;
+  const consideredRoutes = routes.slice(0, 3);
+  if (preferenceString && consideredRoutes.length >= 2) {
+    try {
+      const pick = await pickRouteWithClaude(preferenceString, consideredRoutes);
+      if (
+        typeof pick.chosenIndex === 'number' &&
+        Number.isInteger(pick.chosenIndex) &&
+        pick.chosenIndex >= 0 &&
+        pick.chosenIndex < consideredRoutes.length
+      ) {
+        chosenIndex = pick.chosenIndex;
+        recommendedReasoning = pick.reasoning;
+      } else {
+        console.warn('[pick-route] chosenIndex out of bounds, defaulting to 0', pick);
+      }
+    } catch (e) {
+      console.error('[pick-route]', e);
+    }
+  }
+
+  const paceSec = paceSecondsPerKm(params.pace);
+  const surfaceLabels = ['Canal & towpath mix', 'Park-to-park chain', 'Hilly back-street route'];
+
+  return consideredRoutes.map((rt, i) => {
+    const km = rt.distanceMeters / 1000;
+    const isRecommended = i === chosenIndex;
+    return {
+      id: `real-${i}`,
+      name: surfaceLabels[i] ?? ROUTE_NAMES[i] ?? `Route ${i + 1}`,
+      seed: ROUTE_SEEDS[i] ?? 33,
+      distanceMeters: rt.distanceMeters,
+      durationSeconds: km * paceSec,
+      rationale:
+        isRecommended && recommendedReasoning
+          ? recommendedReasoning
+          : `Via ${rt.streetNames.slice(0, 3).join(', ')}${rt.streetNames.length > 3 ? '…' : ''}`,
+      geometry: rt.geometry,
+      origin,
+      destination: dest,
+      destinationLabel: params.destination?.label ?? '',
+      elevationMeters: [18, 24, 86][i] ?? 20,
+      offroadPct: [72, 58, 30][i] ?? 50,
+      source: rt,
+      isRecommended,
+    };
+  });
+}
 
 export default function Home() {
-  const [destPlace, setDestPlace] = useState<GeocodeResult | null>(null);
-  const [pace, setPace] = useState('5:30');
-  const [prefs, setPrefs] = useState<Set<PreferenceId>>(new Set());
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<RouteResult | null>(null);
+  const [tab, setTab] = useState<Tab>('discover');
+  const [mode, setMode] = useState<Mode>(null);
+  const [designParams, setDesignParams] = useState<DesignParams>(defaultDesignParams());
+  const [routes, setRoutes] = useState<GeneratedRoute[]>([]);
+  const [routesLoading, setRoutesLoading] = useState(false);
+  const [routesError, setRoutesError] = useState<string | null>(null);
+  const [chosenRoute, setChosenRoute] = useState<GeneratedRoute | null>(null);
+  const [finishStats, setFinishStats] = useState<FinishStats>({ elapsedSeconds: 0, distanceKm: 0 });
+  const generationIdRef = useRef(0);
 
-  const togglePref = (id: PreferenceId) => {
-    setPrefs((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  const goToDiscover = () => {
+    setTab('discover');
+    setMode(null);
   };
 
-  const onPlan = useCallback(async () => {
-    setError(null);
-    if (!destPlace) {
-      setError('Pick a destination from the suggestions');
-      return;
-    }
-    const paceSecs = parsePaceToSecondsPerKm(pace);
-    if (paceSecs === null) {
-      setError('Pace must be M:SS, e.g. 5:30');
-      return;
-    }
-    setBusy(true);
+  const handleGenerate = async (params: DesignParams) => {
+    const myId = ++generationIdRef.current;
+    setDesignParams(params);
+    setMode('routes');
+    setRoutesLoading(true);
+    setRoutesError(null);
+    setRoutes([]);
     try {
-      const origin = await getCurrentPosition();
-      const selectedPrompts = PREFERENCE_OPTIONS
-        .filter((opt) => prefs.has(opt.id))
-        .map((opt) => opt.prompt);
-      const preferenceString = selectedPrompts.join(' ');
-      const routes = await getWalkingDirections(origin, destPlace.coords, {
-        generateVariants: preferenceString.length > 0,
-      });
-
-      let chosenIndex = 0;
-      let reasoning: string | null = null;
-      if (preferenceString) {
-        if (routes.length < 2) {
-          reasoning = `Only one walking route available — couldn't apply preferences.`;
-        } else {
-          try {
-            const pick = await pickRouteWithClaude(preferenceString, routes);
-            chosenIndex = pick.chosenIndex;
-            reasoning = pick.reasoning;
-          } catch (e) {
-            reasoning = `Couldn't apply preferences: ${e instanceof Error ? e.message : 'unknown error'}`;
-          }
-        }
-      }
-
-      const route = routes[chosenIndex];
-      const durationSeconds = (route.distanceMeters / 1000) * paceSecs;
-      setResult({
-        origin,
-        destination: destPlace.coords,
-        destinationLabel: destPlace.label,
-        geometry: route.geometry,
-        distanceMeters: route.distanceMeters,
-        durationSeconds,
-        arrivalTime: new Date(Date.now() + durationSeconds * 1000),
-        reasoning,
-        alternativesCount: routes.length,
-        chosenIndex,
-      });
+      const result = params.destination ? await buildRealRoutes(params) : await buildLoopRoutes(params);
+      if (myId !== generationIdRef.current) return; // a newer call superseded this one
+      setRoutes(result);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Something went wrong');
-      setResult(null);
+      if (myId !== generationIdRef.current) return;
+      const msg = e instanceof Error ? e.message : 'Could not generate routes';
+      setRoutesError(msg);
+      setRoutes(buildMockRoutes(params));
     } finally {
-      setBusy(false);
+      if (myId === generationIdRef.current) setRoutesLoading(false);
     }
-  }, [destPlace, pace, prefs]);
+  };
+
+  const renderScreen = () => {
+    if (mode === 'live' && chosenRoute) {
+      return (
+        <LiveRunScreen
+          route={chosenRoute}
+          onFinish={(stats) => {
+            setFinishStats(stats);
+            setMode('summary');
+          }}
+        />
+      );
+    }
+    if (mode === 'summary' && chosenRoute) {
+      return (
+        <SummaryScreen
+          route={chosenRoute}
+          elapsedSeconds={finishStats.elapsedSeconds}
+          distanceKm={finishStats.distanceKm}
+          onDone={goToDiscover}
+        />
+      );
+    }
+    if (mode === 'routes') {
+      return (
+        <div className="anim-slideInRight">
+          <RoutesScreen
+            routes={routes}
+            loading={routesLoading}
+            error={routesError}
+            onBack={() => {
+              setMode(null);
+              setTab('design');
+            }}
+            onStart={(r) => {
+              setChosenRoute(r);
+              setMode('live');
+            }}
+          />
+        </div>
+      );
+    }
+    if (tab === 'design') {
+      return (
+        <div className="anim-slideInRight">
+          <DesignScreen
+            initial={designParams}
+            onBack={() => setTab('discover')}
+            onGenerate={handleGenerate}
+          />
+        </div>
+      );
+    }
+    if (tab === 'saved') {
+      return (
+        <div className="anim-fadeIn">
+          <SavedScreen />
+        </div>
+      );
+    }
+    if (tab === 'profile') {
+      return (
+        <div className="anim-fadeIn">
+          <ProfileScreen />
+        </div>
+      );
+    }
+    return (
+      <div className="anim-fadeIn">
+        <DiscoverScreen onOpenRoute={() => setTab('design')} />
+      </div>
+    );
+  };
+
+  const isLive = mode === 'live';
+  const showNav = mode !== 'live';
 
   return (
-    <main className="min-h-screen bg-[#f5f1ea] text-[#1a1a1a] flex flex-col font-semibold">
-      <header className="px-6 pt-8 pb-6">
-        <h1 className="text-3xl font-bold tracking-wide uppercase text-[#3da95c]">
-          Route Runner
-        </h1>
-        <p className="text-xs uppercase tracking-widest text-[#1a1a1a]/60 mt-1">
-          Run there. Arrive on time.
-        </p>
-      </header>
-
-      <div className="flex-1 px-6 pb-6 flex flex-col gap-5">
-        <section className={`relative bg-white rounded-2xl p-5 z-20 ${CARD_SHADOW}`}>
-          <label className="block text-xs font-bold text-[#3da95c] uppercase tracking-widest mb-2">
-            Destination
-          </label>
-          <DestinationSearch onSelect={setDestPlace} />
-        </section>
-
-        <section className={`bg-white rounded-2xl p-5 ${CARD_SHADOW}`}>
-          <label className="block text-xs font-bold text-[#3da95c] uppercase tracking-widest mb-2">
-            Pace
-          </label>
-          <div className="flex items-baseline gap-3">
-            <input
-              type="text"
-              value={pace}
-              onChange={(e) => setPace(e.target.value)}
-              className="text-3xl font-bold bg-transparent outline-none w-24"
-            />
-            <span className="text-xs uppercase tracking-widest text-[#1a1a1a]/60">Per Km</span>
-          </div>
-        </section>
-
-        <section className={`bg-white rounded-2xl p-5 ${CARD_SHADOW}`}>
-          <label className="block text-xs font-bold text-[#3da95c] uppercase tracking-widest mb-3">
-            Preferences <span className="opacity-50 normal-case font-normal">(optional)</span>
-          </label>
-          <div className="flex flex-wrap gap-2">
-            {PREFERENCE_OPTIONS.map((opt) => {
-              const active = prefs.has(opt.id);
-              return (
-                <button
-                  key={opt.id}
-                  type="button"
-                  onClick={() => togglePref(opt.id)}
-                  className={
-                    active
-                      ? 'rounded-full px-4 py-2 text-xs uppercase tracking-widest font-bold bg-[#3da95c] text-white shadow-[0_2px_0_0_#2d8045]'
-                      : 'rounded-full px-4 py-2 text-xs uppercase tracking-widest font-bold bg-transparent text-[#1a1a1a]/70 border border-[#1a1a1a]/15 hover:bg-[#3da95c]/10 hover:border-[#3da95c]/40'
-                  }
-                  aria-pressed={active}
-                >
-                  {opt.label}
-                </button>
-              );
-            })}
-          </div>
-        </section>
-
-        {result && (
-          <section className="bg-[#3da95c] text-white rounded-2xl p-5 shadow-[0_4px_0_0_#2d8045,0_8px_24px_-8px_rgba(61,169,92,0.3)]">
-            <p className="text-xs font-bold uppercase tracking-widest opacity-80">Arrive at</p>
-            <p className="text-4xl font-bold tracking-wide mt-1">
-              {formatClockTime(result.arrivalTime)}
-            </p>
-            <p className="text-xs uppercase tracking-widest mt-2 opacity-80">
-              {(result.distanceMeters / 1000).toFixed(2)} km · {formatDuration(result.durationSeconds)}
-            </p>
-            <p className="text-[10px] tracking-wide mt-3 opacity-70 normal-case font-normal">
-              → {result.destinationLabel}
-            </p>
-            {result.reasoning && (
-              <p className="text-xs leading-relaxed mt-3 opacity-90 normal-case font-normal italic">
-                {result.reasoning}
-              </p>
-            )}
-            {result.alternativesCount > 1 && (
-              <p className="text-[10px] uppercase tracking-widest mt-2 opacity-60 font-normal">
-                Picked {result.chosenIndex + 1} of {result.alternativesCount} routes
-              </p>
-            )}
-          </section>
-        )}
-
-        {error && (
-          <section className="bg-white rounded-2xl p-5 shadow-[0_4px_0_0_#dc262633,0_8px_24px_-8px_rgba(220,38,38,0.15)]">
-            <p className="text-xs uppercase tracking-widest text-red-600 leading-relaxed">
-              {error}
-            </p>
-          </section>
-        )}
-
-        <section
-          className={`relative flex-1 bg-white rounded-2xl ${CARD_SHADOW} min-h-[300px] overflow-hidden`}
-        >
-          <Map
-            origin={result?.origin}
-            destination={result?.destination}
-            route={result?.geometry}
-          />
-        </section>
-
-        <div className="flex justify-center pt-2">
-          <button
-            type="button"
-            onClick={onPlan}
-            disabled={busy}
-            className="bg-[#3da95c] text-white rounded-full py-3.5 px-10 text-sm uppercase tracking-widest font-bold shadow-[0_4px_0_0_#2d8045] hover:translate-y-[1px] hover:shadow-[0_3px_0_0_#2d8045] active:translate-y-[2px] active:shadow-[0_2px_0_0_#2d8045] transition-all disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {busy ? 'Planning…' : 'Plan My Route'}
-          </button>
-        </div>
-      </div>
-
-      <footer className="px-6 py-4 text-center">
-        <p className="text-[10px] uppercase tracking-widest text-[#1a1a1a]/40">
-          Powered by <span className="font-bold not-italic">KIWI</span>
-          <span className="font-bold italic">RUNNERS</span>
-        </p>
-      </footer>
+    <main
+      style={{
+        minHeight: '100vh',
+        background: isLive ? '#0F1E18' : 'var(--color-bg, #FAF7F2)',
+        color: 'var(--color-ink, #1A1A1A)',
+      }}
+    >
+      <div style={{ maxWidth: 480, margin: '0 auto', position: 'relative' }}>{renderScreen()}</div>
+      {showNav && (
+        <BottomNav
+          tab={tab}
+          onTabChange={(t) => {
+            setTab(t);
+            setMode(null);
+          }}
+          onRun={() => {
+            setTab('design');
+            setMode(null);
+          }}
+        />
+      )}
     </main>
   );
 }

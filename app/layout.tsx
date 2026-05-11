@@ -1,16 +1,16 @@
 import type { Metadata } from "next";
-import { Barlow_Semi_Condensed } from "next/font/google";
+import { Inter } from "next/font/google";
 import "./globals.css";
 
-const barlow = Barlow_Semi_Condensed({
+const inter = Inter({
   subsets: ["latin"],
-  weight: ["600", "700"],
-  variable: "--font-barlow",
+  weight: ["400", "500", "600", "700"],
+  variable: "--font-inter",
 });
 
 export const metadata: Metadata = {
   title: "Route Runner",
-  description: "Run there. Arrive on time.",
+  description: "Run somewhere new. Powered by Claude.",
 };
 
 export default function RootLayout({
@@ -20,7 +20,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
-      <body className={`${barlow.variable} font-[family-name:var(--font-barlow)] antialiased`}>
+      <body className={`${inter.variable} font-[family-name:var(--font-inter)] antialiased`}>
         {children}
       </body>
     </html>

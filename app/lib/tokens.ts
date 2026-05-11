@@ -1,0 +1,15 @@
+export const C = {
+  forest: '#1F3A2E',
+  forestDeep: '#162820',
+  coral: '#FF6B47',
+  coralDeep: '#E85530',
+  bg: '#FAF7F2',
+  sage: '#E8EDE5',
+  sageDeep: '#D5DDD0',
+  ink: '#1A1A1A',
+  ink60: 'rgba(26,26,26,0.6)',
+  ink40: 'rgba(26,26,26,0.4)',
+  ink20: 'rgba(26,26,26,0.12)',
+  ink08: 'rgba(26,26,26,0.06)',
+  trackerOrange: '#FC5200',
+};

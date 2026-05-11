@@ -47,7 +47,7 @@ export default function Map({ origin, destination, route }: MapProps) {
         type: 'line',
         source: ROUTE_SOURCE_ID,
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#3da95c', 'line-width': 5 },
+        paint: { 'line-color': '#FF6B47', 'line-width': 5 },
       });
     });
     mapRef.current = map;
@@ -71,12 +71,12 @@ export default function Map({ origin, destination, route }: MapProps) {
 
       if (origin) {
         markersRef.current.push(
-          new mapboxgl.Marker({ color: '#3da95c' }).setLngLat(origin).addTo(map),
+          new mapboxgl.Marker({ color: '#1F3A2E' }).setLngLat(origin).addTo(map),
         );
       }
       if (destination) {
         markersRef.current.push(
-          new mapboxgl.Marker({ color: '#1a1a1a' }).setLngLat(destination).addTo(map),
+          new mapboxgl.Marker({ color: '#FF6B47' }).setLngLat(destination).addTo(map),
         );
       }
 
@@ -111,7 +111,7 @@ export default function Map({ origin, destination, route }: MapProps) {
     return (
       <div
         style={{ position: 'absolute', inset: 0 }}
-        className="flex items-center justify-center p-5"
+        className="flex items-center justify-center p-5 bg-[#E8EDE5]"
       >
         <p className="text-xs uppercase tracking-widest text-[#1a1a1a]/40 text-center leading-relaxed">
           Mapbox token<br />not configured
